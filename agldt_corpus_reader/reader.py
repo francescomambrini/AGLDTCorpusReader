@@ -2,6 +2,8 @@
 
 from nltk.corpus.reader.xmldocs import XMLCorpusReader
 from lxml import etree
+from agldt_corpus_reader.utils import Sentence, Word, Artificial
+
 
 class AGLDTReader(XMLCorpusReader):
     def __init__(self, root, fileids):
@@ -13,7 +15,7 @@ class AGLDTReader(XMLCorpusReader):
         # Make sure we have exactly one file -- no concatenating XML.
         if fileid is None and len(self._fileids) == 1:
             fileid = self._fileids[0]
-        if not isinstance(fileid, string_types):
+        if not isinstance(fileid, str):
             raise TypeError('Expected a single file identifier string')
 
         # Read the XML in using lxml.etree.
@@ -28,16 +30,18 @@ class AGLDTReader(XMLCorpusReader):
         except KeyError:
             return False
 
-    def _set_prop_if_there(self, el, p):
+    def _set_prop_if_there(self, el, p, repl=None):
         """
         Generic function that tries to set a proprety by accessing the appropriate XML attribute;
-        if the attribute is not there, None is returned.
-        This is used for properties like "cite" or "cid" that might
-        or might not be set for all files"""
-        try:
-            s = el.attrib[p]
-        except KeyError:
-            s = None
+        if the attribute is not there, either None or a replacement string is returned.
+        This is used for properties like "cite" or "cid" that might or might not be set for all files.
+        It is also useful if there are missing values in the rest of the annotation (e.g. missing head attached to
+        root with `repl='0'`)
+        """
+
+        s = el.attrib.get(p)
+        if not s:
+            s = repl
         return s
 
     def get_sentences_metadata(self, fileids=None):
@@ -53,7 +57,7 @@ class AGLDTReader(XMLCorpusReader):
         """
         if fileids is None:
             fileids = self._fileids
-        elif isinstance(fileids, string_types):
+        elif isinstance(fileids, str):
             fileids = [fileids]
         smetadata = []
         for f in fileids:
@@ -73,11 +77,11 @@ class AGLDTReader(XMLCorpusReader):
         words = sentence_el.xpath("word")
         for w in words:
             wid = self._set_prop_if_there(w, "id")
-            form = self._set_prop_if_there(w, "form")
-            lemma = self._set_prop_if_there(w, "lemma")
-            postag = self._set_prop_if_there(w, "postag")
-            head = self._set_prop_if_there(w, "head")
-            relation = self._set_prop_if_there(w, "relation")
+            form = self._set_prop_if_there(w, "form", repl='_')
+            lemma = self._set_prop_if_there(w, "lemma", repl='_')
+            postag = self._set_prop_if_there(w, "postag", repl='_')
+            head = self._set_prop_if_there(w, "head", '0')
+            relation = self._set_prop_if_there(w, "relation", repl='ERR')
             cite = self._set_prop_if_there(w, "cite")
             if self._is_artificial(w):
                 art_type = self._set_prop_if_there(w, "artificial")
@@ -90,7 +94,7 @@ class AGLDTReader(XMLCorpusReader):
     def _get_sents_el(self, fileids=None):
         if fileids is None:
             fileids = self._fileids
-        elif isinstance(fileids, string_types):
+        elif isinstance(fileids, str):
             fileids = [fileids]
 
         sents = []
@@ -164,7 +168,7 @@ class AGLDTReader(XMLCorpusReader):
                         true_head = self._find_true_head(tok, tokens)
             return true_head
 
-    def sent_to_dggraph(self, sent):
+    def sent_to_dggraph(self, sent, rootrel='PRED'):
         """
         Creates a Dependency Graph object from an AGLDT sentence
         Parameters
@@ -179,8 +183,7 @@ class AGLDTReader(XMLCorpusReader):
         from nltk.parse import DependencyGraph
 
         strsent = "\n".join(["{}\t{}\t{}\t{}".format(w.form, w.postag, w.head, w.relation) for w in sent])
-        rootrel = "AuxZ"
-        for w in sent :
+        for w in sent:
             if w.head == '0':
                 rootrel = w.relation
                 break
@@ -188,11 +191,14 @@ class AGLDTReader(XMLCorpusReader):
 
         return g
 
-
-
+    def triples(self, annotated_sent, rootrel='PRED'):
+        dg = self.sent_to_dggraph(annotated_sent, rootrel)
+        r = dg.nodes[0]
+        return dg.triples(r)
 
     def export_to_conll(self, annotated_sents, out_file, dialect='2009'):
         """
+        # TODO: at the moment, it works with conll 2009 only
         Save the sentences passed to a CoNLL file.
         Parameters
         ----------
